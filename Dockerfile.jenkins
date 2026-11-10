@@ -1,6 +1,6 @@
 FROM jenkins/jenkins:lts
 #switch to root
 USER root 
-RUN apt-get update && apt-get install -y python3 python3-pip python3-pytest python3-fastapi python3-uvicorn python3-prometheus-client python3-httpx && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y docker.io python3 python3-pip python3-pytest python3-fastapi python3-uvicorn python3-prometheus-client python3-httpx && rm -rf /var/lib/apt/lists/*
 #switch back to jenkins - least privilege
 USER jenkins
