@@ -8,7 +8,7 @@ pipeline {
         }
         stage('Lint & Unit Test') {
             steps {
-                sh 'pytest --junitxml=reports/results.xml'
+                sh 'python3 -m pytest tests/ --junitxml=reports/results.xml'
             }
             post {
                 always {
