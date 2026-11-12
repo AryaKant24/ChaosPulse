@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChaosPulse — Telemetry & Fault Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* Reference Spec + Solarized Dark Hybrid Tokens (WCAG AA / APCA Lc 75+) */
+      --page-ground: #061014;
+      --alt-ground: #0a1920;
+      --surface: #0d212a;
+      --surface-raised: #102833;
+      --primary-action-fill: #16161a;
+      --primary-action-hover: #202228;
+      --primary-action-label: #fcfcfd;
+      --hairline: #1b3540;
+      --hairline-strong: #274857;
+
+      --text-primary: #faf8f9;
+      --text-secondary: #e5e5e4;
+      --text-muted: #d6d6d5;
+
+      /* Product & Telemetry Data Accents */
+      --accent-brand: #c8303a;
+      --solar-cyan: #2aa198;
+      --solar-amber: #b58900;
+      --solar-red: #c8303a;
+
+      --container-width: 1376px;
+      --page-margin: 24px;
+      --radius: 0px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      border-radius: var(--radius);
+    }
+
+    body {
+      background-color: var(--page-ground);
+      color: var(--text-primary);
+      font-family: 'Host Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Brand Colour Use: Ambient Glow Behind Content Only */
+    .ambient-glow {
+      position: fixed;
+      top: -180px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 960px;
+      height: 460px;
+      background: radial-gradient(ellipse at center, rgba(42, 161, 152, 0.10) 0%, rgba(200, 48, 58, 0.0) 70%);
+      pointer-events: none;
+      z-index: 0;
+      transition: background 0.6s ease;
+    }
+
+    body.fault-engaged .ambient-glow {
+      background: radial-gradient(ellipse at center, rgba(200, 48, 58, 0.22) 0%, rgba(200, 48, 58, 0.0) 72%);
+    }
+
+    .container {
+      max-width: var(--container-width);
+      margin: 0 auto;
+      padding: 0 var(--page-margin);
+      position: relative;
+      z-index: 1;
+    }
+
+    .mono {
+      font-family: 'JetBrains Mono', monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .tabular {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 1. Site Header: Brand Row Above Full-Width Navigation */
+    header {
+      border-bottom: 1px solid var(--hairline);
+      background: rgba(6, 16, 20, 0.88);
+      backdrop-filter: blur(8px);
+    }
+
+    .header-brand-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--hairline);
+    }
+
+    .brand-identity {
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+    }
+
+    .brand-title {
+      font-size: 20px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+
+    .brand-subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    .header-nav-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      font-size: 14px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      transition: color 0.15s ease;
+    }
+
+    .nav-links a:hover {
+      color: var(--text-primary);
+    }
+
+    .nav-status-group {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      background-color: var(--solar-cyan);
+      display: inline-block;
+    }
+
+    .dot.warn { background-color: var(--solar-amber); }
+    .dot.crit { background-color: var(--solar-red); }
+
+    /* Neutral Square Controls */
+    .btn {
+      background-color: var(--primary-action-fill);
+      color: var(--primary-action-label);
+      border: 1px solid var(--hairline-strong);
+      padding: 8px 16px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      background-color: var(--primary-action-hover);
+      border-color: var(--text-muted);
+    }
+
+    .btn[data-active="true"] {
+      border-color: var(--accent-brand);
+      box-shadow: inset 3px 0 0 var(--accent-brand);
+    }
+
+    .btn-load[data-active="true"] {
+      border-color: var(--solar-cyan);
+      box-shadow: inset 3px 0 0 var(--solar-cyan);
+    }
+
+    /* 2. Executive KPI Band (PowerBI Scorecard Strip) */
+    .kpi-band {
+      padding: 40px 0 32px;
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .card-raised {
+      background-color: var(--surface);
+      border: 1px solid var(--hairline);
+      padding: 24px;
+      box-shadow: 0 10px 28px -12px rgba(0, 0, 0, 0.65);
+    }
+
+    .kpi-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .kpi-value {
+      font-size: 44px;
+      font-weight: 500;
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+      color: var(--text-primary);
+    }
+
+    .kpi-value.pod-id {
+      font-size: 22px;
+      line-height: 1.3;
+      word-break: break-all;
+    }
+
+    .kpi-foot {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--hairline);
+      font-size: 13px;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* 3. Workspace Split: Left Control Matrix, Right Telemetry Canvas */
+    .workspace {
+      display: grid;
+      grid-template-columns: 5fr 7fr;
+      gap: 24px;
+      padding-bottom: 64px;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      padding-bottom: 16px;
+      margin-bottom: 8px;
+      border-bottom: 1px solid var(--hairline);
+    }
+
+    .panel-title {
+      font-size: 18px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .panel-caption {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Fault Control Rows */
+    .control-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--hairline);
+    }
+
+    .control-row:last-child {
+      border-bottom: none;
+      padding-bottom: 4px;
+    }
+
+    .control-meta {
+      flex: 1;
+    }
+
+    .control-name {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .control-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Segmented Latency Selector */
+    .segmented-group {
+      display: inline-flex;
+      border: 1px solid var(--hairline-strong);
+      background: var(--primary-action-fill);
+    }
+
+    .seg-btn {
+      background: transparent;
+      color: var(--text-muted);
+      border: none;
+      border-right: 1px solid var(--hairline);
+      padding: 7px 11px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .seg-btn:last-child {
+      border-right: none;
+    }
+
+    .seg-btn:hover {
+      color: var(--text-primary);
+    }
+
+    .seg-btn.active {
+      background: var(--surface-raised);
+      color: var(--text-primary);
+      font-weight: 500;
+      box-shadow: inset 0 -2px 0 var(--solar-amber);
+    }
+
+    /* Telemetry Chart & Load Bar */
+    .load-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 16px;
+      background: var(--alt-ground);
+      border: 1px solid var(--hairline);
+      margin-bottom: 20px;
+    }
+
+    .slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex: 1;
+    }
+
+    .slider-wrap label {
+      font-size: 13px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      background: var(--hairline-strong);
+      outline: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      background: var(--text-primary);
+      cursor: pointer;
+      border: 1px solid var(--page-ground);
+    }
+
+    /* PowerBI-Style Live Latency Column Chart */
+    .chart-box {
+      background: var(--alt-ground);
+      border: 1px solid var(--hairline);
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    .bar-stage {
+      height: 120px;
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+      padding-top: 8px;
+      border-bottom: 1px solid var(--hairline);
+    }
+
+    .bar-col {
+      flex: 1;
+      background: var(--solar-cyan);
+      min-height: 3px;
+      transition: height 0.2s ease;
+      opacity: 0.85;
+    }
+
+    .bar-col.warn { background: var(--solar-amber); }
+    .bar-col.err { background: var(--solar-red); }
+
+    /* Trace Table */
+    .trace-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .trace-table th {
+      text-align: left;
+      padding: 10px 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+      border-bottom: 1px solid var(--hairline-strong);
+      background: var(--alt-ground);
+    }
+
+    .trace-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--hairline);
+      color: var(--text-secondary);
+    }
+
+    .trace-table th:last-child,
+    .trace-table td:last-child {
+      text-align: right;
+    }
+
+    .status-pill {
+      display: inline-block;
+      padding: 1px 6px;
+      font-size: 12px;
+      border: 1px solid var(--hairline-strong);
+      color: var(--text-primary);
+    }
+
+    .status-pill.ok { border-left: 3px solid var(--solar-cyan); }
+    .status-pill.err { border-left: 3px solid var(--solar-red); }
+
+    @media (max-width: 1024px) {
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .workspace { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 600px) {
+      .kpi-grid { grid-template-columns: 1fr; }
+      .header-brand-row, .header-nav-row { flex-direction: column; align-items: flex-start; gap: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="ambient-glow"></div>
+
+  <!-- 1. Site Header -->
+  <header>
+    <div class="container">
+      <div class="header-brand-row">
+        <div class="brand-identity">
+          <span class="brand-title">ChaosPulse</span>
+          <span class="brand-subtitle">Kubernetes Resiliency &amp; Prometheus Telemetry Console</span>
+        </div>
+        <button class="btn" onclick="triggerChaos('reset')">Reset Pod State</button>
+      </div>
+
+      <div class="header-nav-row">
+        <nav class="nav-links">
+          <a href="/metrics" target="_blank">Prometheus /metrics</a>
+          <a href="/docs" target="_blank">OpenAPI Specification</a>
+          <a href="/healthz" target="_blank">Liveness (/healthz)</a>
+          <a href="/readyz" target="_blank">Readiness (/readyz)</a>
+        </nav>
+
+        <div class="nav-status-group">
+          <span class="status-indicator">
+            <span id="dot-liveness" class="dot"></span>
+            <span id="nav-liveness" class="mono">LIVENESS: 200 OK</span>
+          </span>
+          <span class="status-indicator">
+            <span id="dot-readiness" class="dot"></span>
+            <span id="nav-readiness" class="mono">READINESS: 200 READY</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- 2. Executive KPI Band -->
+    <section class="kpi-band">
+      <div class="kpi-grid">
+        <div class="card-raised">
+          <div class="kpi-label">
+            <span>Active Pod Replica</span>
+            <span id="failover-flag" class="mono" style="color: var(--solar-amber); display: none;">FAILOVER</span>
+          </div>
+          <div id="kpi-pod" class="kpi-value pod-id mono">connecting...</div>
+          <div class="kpi-foot">
+            <span>Container Uptime</span>
+            <span id="kpi-uptime" class="mono">-- s</span>
+          </div>
+        </div>
+
+        <div class="card-raised">
+          <div class="kpi-label">
+            <span>Nominal Requests (200)</span>
+            <span class="mono">COUNTER</span>
+          </div>
+          <div id="kpi-ok" class="kpi-value tabular">0</div>
+          <div class="kpi-foot">
+            <span>Success Ratio</span>
+            <span id="kpi-rate-ratio" class="mono">100.0%</span>
+          </div>
+        </div>
+
+        <div class="card-raised">
+          <div class="kpi-label">
+            <span>Server Faults (500)</span>
+            <span class="mono">COUNTER</span>
+          </div>
+          <div id="kpi-err" class="kpi-value tabular">0</div>
+          <div class="kpi-foot">
+            <span>Fault Injection State</span>
+            <span id="kpi-monkey-state" class="mono">Nominal</span>
+          </div>
+        </div>
+
+        <div class="card-raised">
+          <div class="kpi-label">
+            <span>Observed Latency</span>
+            <span class="mono">HISTOGRAM</span>
+          </div>
+          <div id="kpi-latency" class="kpi-value tabular">--<span style="font-size: 20px; color: var(--text-muted);"> ms</span></div>
+          <div class="kpi-foot">
+            <span>Configured Offset</span>
+            <span id="kpi-offset" class="mono">+0 ms</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Operational Workspace -->
+    <section class="workspace">
+      <!-- Left Column: Fault Control Matrix -->
+      <div class="card-raised">
+        <div class="panel-header">
+          <h2 class="panel-title">Fault Injection Matrix</h2>
+          <span class="panel-caption mono">TARGET: CURRENT REPLICA</span>
+        </div>
+
+        <div class="control-list">
+          <!-- Row 1: HTTP 500 Faults -->
+          <div class="control-row">
+            <div class="control-meta">
+              <div class="control-name">
+                <span>Application Fault (HTTP 500)</span>
+              </div>
+              <p class="control-desc">Rejects 50% of incoming <span class="mono">/api/work</span> calls while <span class="mono">up == 1</span> remains healthy.</p>
+            </div>
+            <button id="btn-monkey" class="btn mono" data-active="false" onclick="triggerChaos('monkey')">
+              NOMINAL
+            </button>
+          </div>
+
+          <!-- Row 2: Latency Spike -->
+          <div class="control-row">
+            <div class="control-meta">
+              <div class="control-name">
+                <span>Artificial Latency Offset</span>
+              </div>
+              <p class="control-desc">Shifts <span class="mono">http_request_duration_seconds_bucket</span> to test p95 tail quantiles.</p>
+            </div>
+            <div class="segmented-group mono" id="latency-group">
+              <button class="seg-btn active" data-ms="0" onclick="setLatency(0)">0ms</button>
+              <button class="seg-btn" data-ms="250" onclick="setLatency(250)">250ms</button>
+              <button class="seg-btn" data-ms="600" onclick="setLatency(600)">600ms</button>
+              <button class="seg-btn" data-ms="1200" onclick="setLatency(1200)">1.2s</button>
+            </div>
+          </div>
+
+          <!-- Row 3: Readiness Probe -->
+          <div class="control-row">
+            <div class="control-meta">
+              <div class="control-name">
+                <span>Readiness Gate (/readyz)</span>
+              </div>
+              <p class="control-desc">Returns HTTP 503 so Kubernetes evicts this Pod IP from Service endpoints.</p>
+            </div>
+            <button id="btn-readiness" class="btn mono" data-active="false" onclick="triggerChaos('readiness')">
+              200 READY
+            </button>
+          </div>
+
+          <!-- Row 4: Liveness Probe -->
+          <div class="control-row">
+            <div class="control-meta">
+              <div class="control-name">
+                <span>Liveness Probe (/healthz)</span>
+              </div>
+              <p class="control-desc">Returns HTTP 500 so Kubelet terminates and restarts the container.</p>
+            </div>
+            <button id="btn-liveness" class="btn mono" data-active="false" onclick="triggerChaos('liveness')">
+              200 ALIVE
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Synthetic Telemetry & Trace -->
+      <div class="card-raised">
+        <div class="panel-header">
+          <h2 class="panel-title">Telemetry Stream &amp; Load Controller</h2>
+          <span id="stream-state" class="panel-caption mono">GENERATOR: IDLE</span>
+        </div>
+
+        <div class="load-toolbar">
+          <button id="btn-blaster" class="btn btn-load mono" data-active="false" onclick="toggleBlaster()">
+            Engage Load Generator
+          </button>
+
+          <div class="slider-wrap">
+            <label for="rate-slider">Throughput</label>
+            <input id="rate-slider" type="range" min="1" max="20" value="4" oninput="updateRate(this.value)" />
+            <span id="rate-label" class="mono" style="font-size: 13px; min-width: 64px; text-align: right;">4 req/s</span>
+          </div>
+        </div>
+
+        <!-- Live 28-Sample Latency Distribution Chart -->
+        <div class="chart-box">
+          <div class="chart-header mono">
+            <span>REAL-TIME RESPONSE LATENCY (LAST 28 REQUESTS)</span>
+            <span>CYAN: 200 OK &nbsp;|&nbsp; AMBER: &gt;200MS &nbsp;|&nbsp; CRIMSON: 500 FAULT</span>
+          </div>
+          <div id="bar-stage" class="bar-stage"></div>
+        </div>
+
+        <!-- Tabular Request Trace -->
+        <table class="trace-table mono">
+          <thead>
+            <tr>
+              <th>TIMESTAMP</th>
+              <th>POD REPLICA</th>
+              <th>STATUS</th>
+              <th>DURATION</th>
+            </tr>
+          </thead>
+          <tbody id="trace-body">
+            <tr>
+              <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 24px;">
+                Engage Load Generator to populate live telemetry stream.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let lastPod = null;
+    let blasterInterval = null;
+    let currentRps = 4;
+    const maxBars = 28;
+    const barHistory = [];
+
+    function initChart() {
+      const stage = document.getElementById('bar-stage');
+      stage.innerHTML = '';
+      for (let i = 0; i < maxBars; i++) {
+        const bar = document.createElement('div');
+        bar.className = 'bar-col';
+        bar.style.height = '4px';
+        stage.appendChild(bar);
+      }
+    }
+
+    function pushChartSample(ms, status) {
+      barHistory.push({ ms, status });
+      if (barHistory.length > maxBars) barHistory.shift();
+
+      const stage = document.getElementById('bar-stage');
+      const bars = stage.children;
+      const offset = maxBars - barHistory.length;
+
+      for (let i = 0; i < maxBars; i++) {
+        if (i < offset) {
+          bars[i].style.height = '4px';
+          bars[i].className = 'bar-col';
+        } else {
+          const sample = barHistory[i - offset];
+          const pct = Math.min(100, Math.max(6, Math.round((sample.ms / 800) * 100)));
+          bars[i].style.height = `${pct}%`;
+          if (sample.status !== 200) {
+            bars[i].className = 'bar-col err';
+          } else if (sample.ms >= 200) {
+            bars[i].className = 'bar-col warn';
+          } else {
+            bars[i].className = 'bar-col';
+          }
+        }
+      }
+    }
+
+    async function pollStatus() {
+      try {
+        const res = await fetch('/api/status');
+        if (!res.ok) throw new Error('Unreachable');
+        const data = await res.json();
+
+        // Failover detection
+        if (lastPod && lastPod !== data.pod) {
+          const flag = document.getElementById('failover-flag');
+          flag.style.display = 'inline';
+          setTimeout(() => { flag.style.display = 'none'; }, 6000);
+        }
+        lastPod = data.pod;
+
+        document.getElementById('kpi-pod').textContent = data.pod;
+        document.getElementById('kpi-uptime').textContent = `${data.uptime_seconds} s`;
+        document.getElementById('kpi-ok').textContent = data.local_ok;
+        document.getElementById('kpi-err').textContent = data.local_err;
+
+        const total = data.local_ok + data.local_err;
+        const ratio = total > 0 ? ((data.local_ok / total) * 100).toFixed(1) : '100.0';
+        document.getElementById('kpi-rate-ratio').textContent = `${ratio}%`;
+        document.getElementById('kpi-offset').textContent = `+${data.latency_ms} ms`;
+
+        // Ambient fault glow trigger
+        const anyFault = data.monkey || !data.ready || !data.healthy || data.latency_ms > 0;
+        document.body.classList.toggle('fault-engaged', anyFault);
+
+        // Monkey Control State
+        const btnMonkey = document.getElementById('btn-monkey');
+        btnMonkey.dataset.active = data.monkey;
+        btnMonkey.textContent = data.monkey ? 'FAULT ACTIVE' : 'NOMINAL';
+        document.getElementById('kpi-monkey-state').textContent = data.monkey ? '50% HTTP 500' : 'Nominal';
+
+        // Segmented Latency State
+        document.querySelectorAll('#latency-group .seg-btn').forEach(btn => {
+          btn.classList.toggle('active', parseInt(btn.dataset.ms, 10) === data.latency_ms);
+        });
+
+        // Readiness Control State
+        const btnReady = document.getElementById('btn-readiness');
+        const dotReady = document.getElementById('dot-readiness');
+        const navReady = document.getElementById('nav-readiness');
+        btnReady.dataset.active = !data.ready;
+        btnReady.textContent = data.ready ? '200 READY' : '503 EVICTED';
+        navReady.textContent = data.ready ? 'READINESS: 200 READY' : 'READINESS: 503 EVICTED';
+        dotReady.className = data.ready ? 'dot' : 'dot warn';
+
+        // Liveness Control State
+        const btnLive = document.getElementById('btn-liveness');
+        const dotLive = document.getElementById('dot-liveness');
+        const navLive = document.getElementById('nav-liveness');
+        btnLive.dataset.active = !data.healthy;
+        btnLive.textContent = data.healthy ? '200 ALIVE' : '500 POISONED';
+        navLive.textContent = data.healthy ? 'LIVENESS: 200 OK' : 'LIVENESS: 500 POISONED';
+        dotLive.className = data.healthy ? 'dot' : 'dot crit';
+
+      } catch (e) {
+        document.getElementById('kpi-pod').textContent = 'reconnecting...';
+      }
+    }
+
+    async function triggerChaos(action) {
+      await fetch(`/api/chaos/${action}`, { method: 'POST' });
+      await pollStatus();
+    }
+
+    async function setLatency(ms) {
+      await fetch(`/api/chaos/latency?ms=${ms}`, { method: 'POST' });
+      await pollStatus();
+    }
+
+    async function fireWorkRequest() {
+      const t0 = performance.now();
+      try {
+        const res = await fetch('/api/work');
+        const data = await res.json();
+        const ms = data.latency_ms ?? Math.round(performance.now() - t0);
+        document.getElementById('kpi-latency').innerHTML = `${ms}<span style="font-size: 20px; color: var(--text-muted);"> ms</span>`;
+        pushChartSample(ms, res.status);
+        appendTraceRow(res.status, data.pod || lastPod || 'replica', ms);
+        pollStatus();
+      } catch (err) {
+        const ms = Math.round(performance.now() - t0);
+        pushChartSample(ms, 500);
+        appendTraceRow('DROP', 'network-timeout', ms);
+      }
+    }
+
+    function toggleBlaster() {
+      const btn = document.getElementById('btn-blaster');
+      const stateLabel = document.getElementById('stream-state');
+      if (blasterInterval) {
+        clearInterval(blasterInterval);
+        blasterInterval = null;
+        btn.dataset.active = 'false';
+        btn.textContent = 'Engage Load Generator';
+        stateLabel.textContent = 'GENERATOR: IDLE';
+      } else {
+        startBlasterLoop();
+        btn.dataset.active = 'true';
+        btn.textContent = 'Halt Load Generator';
+        stateLabel.textContent = `STREAMING: ${currentRps} REQ/S`;
+      }
+    }
+
+    function startBlasterLoop() {
+      if (blasterInterval) clearInterval(blasterInterval);
+      const intervalMs = Math.max(50, Math.floor(1000 / currentRps));
+      fireWorkRequest();
+      blasterInterval = setInterval(fireWorkRequest, intervalMs);
+    }
+
+    function updateRate(val) {
+      currentRps = parseInt(val, 10);
+      document.getElementById('rate-label').textContent = `${currentRps} req/s`;
+      if (blasterInterval) {
+        document.getElementById('stream-state').textContent = `STREAMING: ${currentRps} REQ/S`;
+        startBlasterLoop();
+      }
+    }
+
+    function appendTraceRow(status, pod, ms) {
+      const tbody = document.getElementById('trace-body');
+      if (tbody.children.length === 1 && tbody.children[0].children.length === 1) {
+        tbody.innerHTML = '';
+      }
+      const tr = document.createElement('tr');
+      const now = new Date().toLocaleTimeString('en-GB', { hour12: false });
+      const pillClass = status === 200 ? 'status-pill ok' : 'status-pill err';
+
+      tr.innerHTML = `
+        <td>${now}</td>
+        <td>${pod}</td>
+        <td><span class="${pillClass}">${status}</span></td>
+        <td>${ms} ms</td>
+      `;
+      tbody.prepend(tr);
+      while (tbody.children.length > 8) {
+        tbody.removeChild(tbody.lastChild);
+      }
+    }
+
+    initChart();
+    setInterval(pollStatus, 2000);
+    pollStatus();
+  </script>
+</body>
+</html>

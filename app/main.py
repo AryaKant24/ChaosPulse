@@ -1,107 +1,211 @@
-import time, random, socket, threading
-from fastapi import FastAPI, Response, status
-from fastapi.responses import HTMLResponse
-from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+import asyncio
+import os
+import random
+import socket
+import time
+from pathlib import Path
+from typing import Optional
 
-app = FastAPI()
-POD_NAME = socket.gethostname()
+from fastapi import FastAPI, Query, Response
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    REGISTRY,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+)
 
-state = {"monkey": False, 
-         "ready": True, 
-         "healthy": True, 
-         "latency": 0.03, 
-         "err_rate": 0.02, 
-         "event": "Stable"
-        }
+app = FastAPI(
+    title="ChaosPulse SRE War Room",
+    description="Cloud-Native Chaos Engineering & Prometheus Telemetry Microservice",
+    version="2.0.0",
+)
 
-REQ_COUNT = Counter(name = "http_requests_total", documentation = "Total requests", labelnames=["pod", "route", "status"]) #increments every time a user visits the website
-IN_FLIGHT = Gauge(name = "in_flight_requests", documentation="Active requests", labelnames=["pod"]) #can go +1 or -1
-POD_READY = Gauge(name = "pod_readiness_state", documentation="1=Ready, 0=Evicted", labelnames=["pod"]) #can go +1 or -1
-LATENCY = Histogram(name = "http_request_duration_seconds", documentation="Latency", labelnames=["pod", "route"], buckets=[0.05, 0.1, 0.5, 1.0, 2.5]) #buckets
+POD_NAME = os.getenv("HOSTNAME", socket.gethostname())
+START_TIME = time.time()
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-POD_READY.labels(pod=POD_NAME).set(1)
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-def monkey_loop():
-    while True:
-        time.sleep(10)
-        if not state["monkey"]: 
-            continue
-        r = random.random() #create a random event when monkey is true
-        if r < 0.3:
-            state.update({"ready": False, "event": "Readiness Drop (503)"})
-            POD_READY.labels(pod=POD_NAME).set(0)
-        elif r < 0.65:
-            state.update({"latency": 1.2, "err_rate": 0.35, "event": "Latency/5xx Spike"})
-        else:
-            state.update({"ready": True, "latency": 0.03, "err_rate": 0.02, "event": "Recovered"})
-            POD_READY.labels(pod=POD_NAME).set(1)
+# In-memory chaos state per Pod replica
+state = {
+    "monkey": False,         # Injects 50% HTTP 500 errors on /api/work
+    "latency_ms": 0,         # Artificial delay added to /api/work (ms)
+    "ready": True,           # Controls /readyz (Kubernetes Readiness Probe)
+    "healthy": True,         # Controls /healthz (Kubernetes Liveness Probe)
+    "local_ok": 0,           # Local Pod 200 counter for War Room UI
+    "local_err": 0,          # Local Pod 500 counter for War Room UI
+}
 
-threading.Thread(target=monkey_loop, daemon=True).start()
 
-@app.get("/", response_class=HTMLResponse)
-def ui():
-    return f"""<html><body style="font-family:monospace;background:#111;color:#eee;padding:2rem;">
-    <h2>🐒 ChaosPulse War Room</h2>
-    <p>Pod: <b>{POD_NAME}</b> | Monkey: <b>{state['monkey']}</b> | Event: <b>{state['event']}</b></p>
-    <p>Readiness (/readyz): <b>{state['ready']}</b> | Liveness (/healthz): <b>{state['healthy']}</b></p>
-    <button onclick="fetch('/chaos/monkey',{{method:'POST'}}).then(()=>location.reload())">Toggle Monkey</button>
-    <button onclick="fetch('/chaos/spike',{{method:'POST'}}).then(()=>location.reload())">Spike Latency</button>
-    <button onclick="fetch('/chaos/unready',{{method:'POST'}}).then(()=>location.reload())">Fail Readiness (503)</button>
-    <button onclick="fetch('/chaos/poison',{{method:'POST'}}).then(()=>location.reload())">Fail Liveness (500)</button>
-    <button onclick="fetch('/chaos/reset',{{method:'POST'}}).then(()=>location.reload())">Reset</button>
-    </body></html>"""
+def get_or_create_counter(name: str, doc: str, labelnames: list[str]) -> Counter:
+    if name in REGISTRY._names_to_collectors:
+        return REGISTRY._names_to_collectors[name]  # type: ignore[return-value]
+    return Counter(name, doc, labelnames)
 
-#liveness probe - kill and restart container when 500
+
+def get_or_create_gauge(name: str, doc: str, labelnames: list[str]) -> Gauge:
+    if name in REGISTRY._names_to_collectors:
+        return REGISTRY._names_to_collectors[name]  # type: ignore[return-value]
+    return Gauge(name, doc, labelnames)
+
+
+def get_or_create_histogram(
+    name: str, doc: str, labelnames: list[str], buckets: tuple[float, ...]
+) -> Histogram:
+    if name in REGISTRY._names_to_collectors:
+        return REGISTRY._names_to_collectors[name]  # type: ignore[return-value]
+    return Histogram(name, doc, labelnames, buckets=buckets)
+
+
+# Prometheus RED Metrics
+REQUEST_COUNT = get_or_create_counter(
+    "http_requests_total",
+    "Total HTTP requests processed by ChaosPulse",
+    ["endpoint", "status", "pod"],
+)
+IN_FLIGHT = get_or_create_gauge(
+    "in_flight_requests",
+    "Number of HTTP requests currently in flight",
+    ["pod"],
+)
+REQUEST_LATENCY = get_or_create_histogram(
+    "http_request_duration_seconds",
+    "HTTP request latency distribution in seconds",
+    ["endpoint", "pod"],
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
+
+# Pre-initialize time series so /metrics immediately exposes all families for pytest & Grafana
+REQUEST_COUNT.labels(endpoint="/api/work", status="200", pod=POD_NAME).inc(0)
+REQUEST_COUNT.labels(endpoint="/api/work", status="500", pod=POD_NAME).inc(0)
+IN_FLIGHT.labels(pod=POD_NAME).set(0)
+REQUEST_LATENCY.labels(endpoint="/api/work", pod=POD_NAME).observe(0.005)
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    return JSONResponse({"service": "ChaosPulse", "pod": POD_NAME, "status": "running"})
+
+
+@app.get("/api/status")
+async def get_status():
+    """Returns live Pod identity, probe statuses, and chaos flags for the War Room UI."""
+    return {
+        "pod": POD_NAME,
+        "uptime_seconds": round(time.time() - START_TIME, 1),
+        "monkey": state["monkey"],
+        "latency_ms": state["latency_ms"],
+        "ready": state["ready"],
+        "healthy": state["healthy"],
+        "local_ok": state["local_ok"],
+        "local_err": state["local_err"],
+    }
+
+
 @app.get("/healthz")
-def liveness(response: Response):
-    if not state["healthy"]: 
-        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-    return {"healthy": state["healthy"]}
+async def healthz():
+    """Kubernetes Liveness Probe: returns 500 when poisoned to trigger a container restart."""
+    if not state["healthy"]:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "unhealthy", "pod": POD_NAME, "probe": "liveness"},
+        )
+    return {"status": "alive", "pod": POD_NAME}
 
-#readiness probe - stop sending user traffic when 503
+
 @app.get("/readyz")
-def readiness(response: Response):
-    if not state["ready"]: 
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return {"ready": state["ready"]}
+async def readyz():
+    """Kubernetes Readiness Probe: returns 503 to evict Pod from Service endpoints."""
+    if not state["ready"]:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "pod": POD_NAME, "probe": "readiness"},
+        )
+    return {"status": "ready", "pod": POD_NAME}
+
 
 @app.get("/api/work")
-def work(response: Response):
-    IN_FLIGHT.labels(pod=POD_NAME).inc() #increment the visited count 
+async def do_work():
+    """Simulates workload execution and records Prometheus Counter, Gauge, and Histogram metrics."""
+    IN_FLIGHT.labels(pod=POD_NAME).inc()
+    start = time.perf_counter()
+    try:
+        # Base jitter (10-45ms) + optional artificial latency spike
+        base_delay = random.uniform(0.01, 0.045)
+        extra_delay = state["latency_ms"] / 1000.0
+        await asyncio.sleep(base_delay + extra_delay)
 
-    start = time.time()
-    time.sleep(state["latency"] + random.uniform(0.01, 0.03))  #creating a work delay
-    code = "500" if random.random() < state["err_rate"] else "200"
+        # Chaos Monkey: 50% chance of throwing HTTP 500 when enabled
+        if state["monkey"] and random.random() < 0.5:
+            state["local_err"] += 1
+            REQUEST_COUNT.labels(endpoint="/api/work", status="500", pod=POD_NAME).inc()
+            duration = time.perf_counter() - start
+            REQUEST_LATENCY.labels(endpoint="/api/work", pod=POD_NAME).observe(duration)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": "Chaos Monkey sabotaged request!",
+                    "pod": POD_NAME,
+                    "latency_ms": round(duration * 1000, 1),
+                },
+            )
 
-    if code == "500": 
-        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        state["local_ok"] += 1
+        REQUEST_COUNT.labels(endpoint="/api/work", status="200", pod=POD_NAME).inc()
+        duration = time.perf_counter() - start
+        REQUEST_LATENCY.labels(endpoint="/api/work", pod=POD_NAME).observe(duration)
+        return {
+            "status": "ok",
+            "pod": POD_NAME,
+            "latency_ms": round(duration * 1000, 1),
+        }
+    finally:
+        IN_FLIGHT.labels(pod=POD_NAME).dec()
 
-    LATENCY.labels(pod=POD_NAME, route="/api/work").observe(time.time() - start) #update histogram
-    REQ_COUNT.labels(pod=POD_NAME, route="/api/work", status=code).inc() #increment request counter
-    IN_FLIGHT.labels(pod=POD_NAME).dec() #decrement the active users
-    return {"status": code, "pod": POD_NAME}
 
-#Now we unleash the chaos
+@app.post("/api/chaos/{action}")
+@app.get("/api/chaos/{action}")
+async def trigger_chaos(
+    action: str,
+    ms: Optional[int] = Query(default=None, description="Optional latency in ms"),
+):
+    """Toggles or resets chaos modes for the current Pod replica."""
+    if action == "monkey":
+        state["monkey"] = not state["monkey"]
+    elif action == "latency":
+        if ms is not None:
+            state["latency_ms"] = max(0, min(ms, 5000))
+        else:
+            state["latency_ms"] = 0 if state["latency_ms"] > 0 else 600
+    elif action == "readiness":
+        state["ready"] = not state["ready"]
+    elif action == "liveness":
+        state["healthy"] = not state["healthy"]
+    elif action == "reset":
+        state["monkey"] = False
+        state["latency_ms"] = 0
+        state["ready"] = True
+        state["healthy"] = True
+    else:
+        return JSONResponse(status_code=400, content={"error": f"Unknown action: {action}"})
 
-@app.post("/chaos/monkey")
-def toggle(): 
-    state["monkey"] = not state["monkey"]; return state
+    return {
+        "action": action,
+        "pod": POD_NAME,
+        "state": state,
+    }
 
-@app.post("/chaos/spike")
-def spike(): 
-    state.update({"latency": 1.5, "err_rate": 0.4, "event": "Manual Spike"}); return state
-
-@app.post("/chaos/unready")
-def unready(): 
-    state.update({"ready": False, "event": "Manual Unready"}); POD_READY.labels(pod=POD_NAME).set(0); return state
-
-@app.post("/chaos/poison")
-def poison(): 
-    state.update({"healthy": False, "event": "Poison Pill"}); return state
-
-@app.post("/chaos/reset")
-def reset(): 
-    state.update({"monkey": False, "ready": True, "healthy": True, "latency": 0.03, "err_rate": 0.02, "event": "Reset"}); POD_READY.labels(pod=POD_NAME).set(1); return state
 
 @app.get("/metrics")
-def metrics(): return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+async def metrics():
+    """Prometheus scrape endpoint."""
+    return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
