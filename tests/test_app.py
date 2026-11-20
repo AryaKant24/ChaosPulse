@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client.parser import text_string_to_metric_families
 
 import app.main as main
 
@@ -42,9 +43,16 @@ def _counter_value(status):
 
 
 def _histogram_count():
-    return main.REQUEST_LATENCY.labels(
-        endpoint="/api/work", pod=main.POD_NAME
-    )._count.get()
+    metrics = client.get("/metrics").text
+    expected_labels = {"endpoint": "/api/work", "pod": main.POD_NAME}
+    for family in text_string_to_metric_families(metrics):
+        for sample in family.samples:
+            if (
+                sample.name == "http_request_duration_seconds_count"
+                and sample.labels == expected_labels
+            ):
+                return int(sample.value)
+    return 0
 
 
 def _in_flight_value():
