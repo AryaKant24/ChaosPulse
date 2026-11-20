@@ -1,46 +1,39 @@
 # Phase 3 Review
 
-**Status:** Phase 3 validation is complete for app, tests, manifests, and Prometheus. Jenkins, browser interaction, and fault experiments remain unchecked.
+**Status:** Implementation and local runtime checks passed. Jenkins has not run on this branch.
 
-## Cause of the rollout wait
+## Changes
 
-- Minikube rebooted and recreated the app pod sandboxes.
-- The Prometheus image pull took 39 seconds.
-- Prometheus loaded its configuration and became Ready.
-- The Prometheus Deployment is now 1/1 Available.
-
-## Stale app image and fix
-
-- The live `/api/status` response has no `expires_at` field.
-- The live UI has the old pod label.
-- The startup script skipped the build when a local `chaospulse:1.0` image already existed.
-- The live app did not include the latest backend and UI changes.
-- `start-lab.ps1` now rebuilds the app image, loads it into Minikube, and restarts the app Deployment.
-- The Strict Teacher reviewed this fix before rollout.
-- The current source image was built and loaded into Minikube. The app Deployment restarted and completed its rollout.
-- All three new app pods are Ready. The API returns `expires_at`, and the UI serves the new pod snapshot label.
-
-## Validation results
-
-- `/healthz`, `/readyz`, and `/api/status` returned HTTP 200.
-- All three app pods were Ready.
-- Prometheus showed three distinct pod targets with `up=1`.
-- Each target had 120 samples in the last ten minutes. Each `min_over_time(up[10m])` value was 1.
-- A read-only query through Grafana returned `up=1` for all three pods.
-- The in-flight gauge was 0 for all three pods.
-- Three normal `/api/work` requests returned 200 from one pod. Its request counter and histogram count increased from 0 to 3. All gauges returned to 0.
-- Kubeconform `v0.6.7` reported 7 valid resources in 3 files.
-- The project suite passed: 15 tests passed. The first run found four tests that read a private histogram field. The helper now reads the public Prometheus exposition.
-- PowerShell syntax parsing and `git diff --check` passed.
+- Updated `start-lab.ps1` to rebuild and load the app image before restarting the deployment. This prevents Minikube from running a stale local image.
+- Read histogram counts from the public Prometheus exposition in tests.
+- Kept fault state, expiry, and request counters local to each pod.
 
 ## Strict Teacher review
 
-- Confirmed that the startup-script fix rebuilds and reloads the app image before restarting the Deployment.
-- Reviewed the full Phase 3 changes and outcomes after implementation.
-- Cleared the startup-script fix and the millisecond expiry timestamp change.
+- Reviewed the Phase 3 changes and their integration after implementation.
+- Approved the startup image rebuild fix and the expiry timestamp precision fix.
+- Found no unbounded app endpoint. The work gauge is cleaned up when a request raises an error.
 
-## Limits
+## Checks
 
-- Jenkins was not run. Its configured job targets `*/main`; these commits remain local and were not pushed.
-- Browser interaction was not checked. The served UI content was checked through HTTP.
-- No liveness or readiness fault experiment ran. No target and duration were agreed for an experiment.
+- Project suite: 15 tests passed with the repository virtual environment.
+- Kubeconform `v0.6.7`: 7 resources in 3 files passed strict validation.
+- PowerShell syntax parsing and `git diff --check` passed.
+- Local Minikube: all 3 app pods Ready; `/healthz`, `/readyz`, `/api/status`, and `/metrics` returned 200.
+- Prometheus and Grafana showed all 3 app pod targets as up. Request counters and histogram samples increased for work requests; in-flight gauges returned to 0.
+- Browser: dashboard loaded on a direct pod port-forward. `/api/work` returned 200 with the pod name.
+- Invalid controls returned 400 or 422 and left fault state unchanged.
+- Monkey and 100 ms latency faults expired and returned to nominal state. Readiness returned 503 during the fault and 200 after expiry.
+- Liveness returned 500 and caused one container restart. The pod recovered, and the deployment returned to 3/3 Ready.
+- The four Phase 3 commits were pushed to `origin/feat/automated-chaos` through `af79b07`.
+
+## Jenkins status and limits
+
+- The local `chaospulse-pipeline` job selects `*/main`, so it does not select the pushed feature branch.
+- Jenkins is running, but its API rejects anonymous access. Automatic review rejected use of the container's initial admin password for authentication. No Jenkins credential was used, and the job was not triggered.
+- Jenkins acceptance is open until an authorized Jenkins login or job trigger is available and the job is configured to build `feat/automated-chaos`.
+- No changes were made to the untracked `docs/IMPLEMENTATION_PLAN.md`.
+
+## Outcome
+
+Phase 3 application, manifest, and local runtime checks passed. Jenkins validation remains open. Do not treat CI acceptance as complete until the pushed branch passes the Jenkins pipeline.
