@@ -22,7 +22,10 @@ pipeline {
                 // current schema is used until the cluster version is pinned as well.
                 sh '''#!/usr/bin/env bash
                     set -euo pipefail
-                    cat k8s/*.yaml | docker run --rm -i ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary
+                    for manifest in k8s/*.yaml; do
+                        echo "Validating $manifest"
+                        docker run --rm -i ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary < "$manifest"
+                    done
                 '''
             }
         }
