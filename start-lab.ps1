@@ -16,10 +16,14 @@ if ($LASTEXITCODE -ne 0) {
 
 # 2. Deploy Kubernetes manifests
 Write-Host "[2/5] Applying Kubernetes manifests (k8s/)..." -ForegroundColor Yellow
-docker image inspect chaospulse:1.0 | Out-Null
+Write-Host "      Building the app image from the current checkout..."
+docker build -t chaospulse:1.0 .
 if ($LASTEXITCODE -ne 0) {
-    docker build -t chaospulse:1.0 .
-    minikube image load chaospulse:1.0 --overwrite=true
+    throw "Failed to build the ChaosPulse app image."
+}
+minikube image load chaospulse:1.0 --overwrite=true
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to load the ChaosPulse app image into Minikube."
 }
 
 $prometheusConfigPath = Join-Path $PSScriptRoot "monitoring\prometheus.yml"
@@ -31,6 +35,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 kubectl apply -f k8s/
+kubectl rollout restart deployment/chaospulse-deploy
 kubectl rollout status deployment/chaospulse-deploy --timeout=90s
 kubectl rollout restart deployment/chaospulse-prometheus
 kubectl rollout status deployment/chaospulse-prometheus --timeout=90s

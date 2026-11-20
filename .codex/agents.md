@@ -65,3 +65,4 @@ Add a row when a new role is actually used. Keep proposed roles in the reusable 
 | 2026-11-19 | Innovator | Propose short-scope project expansions. | Completed | Proposed selectable fault profiles, timed faults, and a bounded retry exercise. |
 | 2026-11-20 | Strict Teacher | Review the Phase 1 core bundles individually and together. | Completed | Static review found no app endpoint with an unbounded wait; pytest blocked before app execution during Windows asyncio loop initialization. |
 | 2026-11-20 | Strict Teacher | Review the Phase 2 UI and CI bundles independently and together. | Completed | Corrected the pod snapshot label; recorded the Jenkins dependency reproducibility and unverified runtime/schema checks. |
+| 2026-11-20 | Strict Teacher | Review the Phase 3 startup-script fix and validation evidence. | Completed | Cleared the rebuild/load/restart fix; confirmed tests and new-image runtime remain unverified. |
