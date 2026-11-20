@@ -7,7 +7,7 @@ This registry tracks Codex skills that are relevant to work in this repository. 
 | Skill | Source | Status for ChaosPulse | Use or trigger |
 |---|---|---|---|
 | `openai-docs` | Codex system skill | Used for a Codex capability question in this project conversation. Not a ChaosPulse implementation skill. | Use when the task asks how Codex features, agents, skills, or app behavior work. Prefer current official documentation when available. |
-| `computer-use` | Codex computer-use plugin | Available in the environment; not used for the repository review or implementation planning. | Use only when the task needs interaction with a Windows application or browser UI. Prefer CLI or API checks for repository and service work. |
+| `computer-use` | Codex computer-use plugin | Used for Phase 3 local app UI and browser endpoint checks. | Use only when the task needs interaction with a Windows application or browser UI. For browser tests, use an incognito tab or built-in browser and do not modify unrelated tabs or resources. Prefer CLI or API checks when they provide the needed evidence. |
 | Spreadsheet, document, presentation, and visualization skills | Codex bundled skills | Not used for the current ChaosPulse work. | Use only if a task requires authoring or inspecting those artifact types. |
 
 ## Project-specific skills
@@ -31,3 +31,4 @@ Keep skill instructions task-specific. Keep general repository rules in `../AGEN
 | Date | Skill | Task | Outcome |
 |---|---|---|---|
 | 2026-11-20 | `openai-docs` | Checked Codex capability guidance while planning agent use. | The local manual fetch failed because this environment could not resolve `developers.openai.com`. No current documentation claim was verified from the network. |
+| 2026-11-20 | `computer-use` | Checked the local ChaosPulse UI and opened `/api/work` in a browser during Phase 3 runtime validation. | The dashboard rendered and the endpoint returned HTTP 200 with the pod name. Use incognito or the built-in browser for future browser tests. |

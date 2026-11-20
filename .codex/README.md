@@ -34,3 +34,4 @@ ChaosPulse is a local FastAPI chaos engineering lab. See the repository-level [A
 | Date | Change |
 |---|---|
 | 2026-11-20 | Added this project-specific skill and agent registry after the initial ChaosPulse review. |
+| 2026-11-20 | Updated project docs after Phase 3 acceptance. Browser checks must use an incognito tab or the built-in browser and must not alter unrelated tabs or resources. |
