@@ -39,11 +39,16 @@ Implement one approved step from the current plan. Inspect repository guidance f
 
 Review the implementation after the implementer finishes. Start with `git diff` and the acceptance criteria. Check relevant tests and inspect code paths for regressions. Run tests only with the repository virtual environment. Do not edit files. Report each criterion as verified, failed, or not checked, with evidence.
 
+### Strict Teacher — used
+
+Before a phase transition, review the full diff against the locked contract. Review each implementation bundle independently and then review their integration. Check endpoint completion and bounded waits, process/pod isolation, configuration and runtime boundaries, and test evidence. Run requested tests only with the repository virtual environment. Do not edit files or operate shared runtime services. Report findings by severity and mark each acceptance criterion verified, failed, or not checked.
+
 ## Delegation guidance
 
 - Use investigators in parallel when their scopes are independent and read-only.
 - Keep implementation tasks sequential when they touch shared files or depend on earlier decisions.
 - Start the validator after implementation. Do not have the validator share editing responsibility with the implementer.
+- Run the Strict Teacher review before presenting a phase as ready to close or moving into the next phase. Resolve blocking findings or report what remains unverified.
 - Give every agent the same acceptance criteria and relevant safety constraints.
 - Ask agents to cite repository-relative paths and function names. Require them to separate observed facts from recommendations.
 - The current Codex session allows at most three subagents alongside the primary agent. If task scope needs more roles, run them in phases.
@@ -58,3 +63,5 @@ Add a row when a new role is actually used. Keep proposed roles in the reusable 
 | 2026-11-19 | Judge | Review metrics, scraping, Grafana, and Kubernetes. | Completed | Identified single static scrape target and missing per-pod discovery. |
 | 2026-11-19 | Guard | Review tests, CI, Docker, and automated chaos risks. | Completed | Identified coverage gaps, Jenkins Docker socket exposure, and control endpoint risks. |
 | 2026-11-19 | Innovator | Propose short-scope project expansions. | Completed | Proposed selectable fault profiles, timed faults, and a bounded retry exercise. |
+| 2026-11-20 | Strict Teacher | Review the Phase 1 core bundles individually and together. | Completed | Static review found no app endpoint with an unbounded wait; pytest blocked before app execution during Windows asyncio loop initialization. |
+| 2026-11-20 | Strict Teacher | Review the Phase 2 UI and CI bundles independently and together. | Completed | Corrected the pod snapshot label; recorded the Jenkins dependency reproducibility and unverified runtime/schema checks. |

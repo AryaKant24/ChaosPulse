@@ -281,6 +281,44 @@
       color: var(--text-muted);
     }
 
+    .control-scope-note,
+    .control-expiry,
+    .control-feedback {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .control-scope-note {
+      margin: 8px 0 14px;
+      padding: 10px 12px;
+      border-left: 2px solid var(--solar-amber);
+      background: var(--alt-ground);
+    }
+
+    .control-expiry {
+      margin-top: 4px;
+      color: var(--text-muted);
+    }
+
+    .control-feedback {
+      min-height: 20px;
+      margin: 10px 0 0;
+    }
+
+    .control-feedback[data-kind="error"] {
+      color: #ff8e95;
+    }
+
+    .control-feedback[data-kind="success"] {
+      color: #8bd7ce;
+    }
+
+    .btn:disabled,
+    .seg-btn:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
     /* Fault Control Rows */
     .control-list {
       display: flex;
@@ -525,32 +563,32 @@
       <div class="kpi-grid">
         <div class="card-raised">
           <div class="kpi-label">
-            <span>Active Pod Replica</span>
-            <span id="failover-flag" class="mono" style="color: var(--solar-amber); display: none;">FAILOVER</span>
+            <span>Pod for Latest State Snapshot</span>
+            <span id="failover-flag" class="mono" style="color: var(--solar-amber); display: none;">POD CHANGED</span>
           </div>
           <div id="kpi-pod" class="kpi-value pod-id mono">connecting...</div>
           <div class="kpi-foot">
-            <span>Container Uptime</span>
+            <span>Local Process Uptime</span>
             <span id="kpi-uptime" class="mono">-- s</span>
           </div>
         </div>
 
         <div class="card-raised">
           <div class="kpi-label">
-            <span>Nominal Requests (200)</span>
-            <span class="mono">COUNTER</span>
+            <span>Local Requests (200)</span>
+            <span class="mono">POD-LOCAL</span>
           </div>
           <div id="kpi-ok" class="kpi-value tabular">0</div>
           <div class="kpi-foot">
-            <span>Success Ratio</span>
+            <span>Local Success Ratio</span>
             <span id="kpi-rate-ratio" class="mono">100.0%</span>
           </div>
         </div>
 
         <div class="card-raised">
           <div class="kpi-label">
-            <span>Server Faults (500)</span>
-            <span class="mono">COUNTER</span>
+            <span>Local Faults (500)</span>
+            <span class="mono">POD-LOCAL</span>
           </div>
           <div id="kpi-err" class="kpi-value tabular">0</div>
           <div class="kpi-foot">
@@ -579,8 +617,11 @@
       <div class="card-raised">
         <div class="panel-header">
           <h2 class="panel-title">Fault Injection Matrix</h2>
-          <span class="panel-caption mono">TARGET: CURRENT REPLICA</span>
+          <span class="panel-caption mono">TARGET: POD HANDLING EACH REQUEST</span>
         </div>
+
+        <p class="control-scope-note">Each control request may reach a different pod through the Kubernetes Service. Fault state and counters belong to the pod shown for that response; a reset affects only the pod that receives it.</p>
+        <p id="control-feedback" class="control-feedback mono" role="status" aria-live="polite">Waiting for the first pod response.</p>
 
         <div class="control-list">
           <!-- Row 1: HTTP 500 Faults -->
@@ -589,7 +630,8 @@
               <div class="control-name">
                 <span>Application Fault (HTTP 500)</span>
               </div>
-              <p class="control-desc">Rejects 50% of incoming <span class="mono">/api/work</span> calls while <span class="mono">up == 1</span> remains healthy.</p>
+              <p class="control-desc">Rejects 50% of incoming <span class="mono">/api/work</span> calls while <span class="mono">up == 1</span> remains healthy. The fault expires automatically on the pod that receives this control.</p>
+              <p id="expiry-monkey" class="control-expiry mono">EXPIRY: NOMINAL</p>
             </div>
             <button id="btn-monkey" class="btn mono" data-active="false" onclick="triggerChaos('monkey')">
               NOMINAL
@@ -602,7 +644,8 @@
               <div class="control-name">
                 <span>Artificial Latency Offset</span>
               </div>
-              <p class="control-desc">Shifts <span class="mono">http_request_duration_seconds_bucket</span> to test p95 tail quantiles.</p>
+              <p class="control-desc">Adds request delay to test p95 tail quantiles; the setting expires on the pod that receives this control.</p>
+              <p id="expiry-latency" class="control-expiry mono">EXPIRY: NOMINAL</p>
             </div>
             <div class="segmented-group mono" id="latency-group">
               <button class="seg-btn active" data-ms="0" onclick="setLatency(0)">0ms</button>
@@ -618,7 +661,8 @@
               <div class="control-name">
                 <span>Readiness Gate (/readyz)</span>
               </div>
-              <p class="control-desc">Returns HTTP 503 so Kubernetes evicts this Pod IP from Service endpoints.</p>
+              <p class="control-desc">Returns HTTP 503 so Kubernetes removes this pod from Service traffic until recovery or expiry.</p>
+              <p id="expiry-readiness" class="control-expiry mono">EXPIRY: NOMINAL</p>
             </div>
             <button id="btn-readiness" class="btn mono" data-active="false" onclick="triggerChaos('readiness')">
               200 READY
@@ -631,7 +675,8 @@
               <div class="control-name">
                 <span>Liveness Probe (/healthz)</span>
               </div>
-              <p class="control-desc">Returns HTTP 500 so Kubelet terminates and restarts the container.</p>
+              <p class="control-desc">Returns HTTP 500 so Kubelet may restart this container. A restart clears its process-local fault state.</p>
+              <p id="expiry-liveness" class="control-expiry mono">EXPIRY: NOMINAL</p>
             </div>
             <button id="btn-liveness" class="btn mono" data-active="false" onclick="triggerChaos('liveness')">
               200 ALIVE
@@ -694,6 +739,7 @@
     let lastPod = null;
     let blasterInterval = null;
     let currentRps = 4;
+    let controlEpoch = 0;
     const maxBars = 28;
     const barHistory = [];
 
@@ -735,82 +781,145 @@
       }
     }
 
-    async function pollStatus() {
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const res = await fetch('/api/status');
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    function renderSnapshot(data) {
+      const state = data.state && typeof data.state === 'object' ? data.state : data;
+      const pod = data.pod || state.pod;
+      if (!pod) return;
+
+      const podChanged = Boolean(lastPod && lastPod !== pod);
+      if (podChanged) {
+        const flag = document.getElementById('failover-flag');
+        flag.style.display = 'inline';
+        setTimeout(() => { flag.style.display = 'none'; }, 6000);
+      }
+      lastPod = pod;
+
+      document.getElementById('kpi-pod').textContent = pod;
+      document.getElementById('kpi-uptime').textContent = data.uptime_seconds !== undefined
+        ? `${data.uptime_seconds} s`
+        : (podChanged ? '-- s' : document.getElementById('kpi-uptime').textContent);
+      document.getElementById('kpi-ok').textContent = state.local_ok ?? (podChanged ? '—' : '0');
+      document.getElementById('kpi-err').textContent = state.local_err ?? (podChanged ? '—' : '0');
+
+      const hasCounters = Number.isFinite(Number(state.local_ok)) && Number.isFinite(Number(state.local_err));
+      if (hasCounters) {
+        const total = Number(state.local_ok) + Number(state.local_err);
+        const ratio = total > 0 ? ((Number(state.local_ok) / total) * 100).toFixed(1) : '100.0';
+        document.getElementById('kpi-rate-ratio').textContent = `${ratio}%`;
+      } else if (podChanged) {
+        document.getElementById('kpi-rate-ratio').textContent = '—';
+      }
+      document.getElementById('kpi-offset').textContent = `+${state.latency_ms ?? 0} ms`;
+
+      const anyFault = Boolean(state.monkey || !state.ready || !state.healthy || state.latency_ms > 0);
+      document.body.classList.toggle('fault-engaged', anyFault);
+
+      const btnMonkey = document.getElementById('btn-monkey');
+      btnMonkey.dataset.active = Boolean(state.monkey);
+      btnMonkey.textContent = state.monkey ? 'FAULT ACTIVE' : 'NOMINAL';
+      document.getElementById('kpi-monkey-state').textContent = state.monkey ? '50% HTTP 500' : 'Nominal';
+
+      document.querySelectorAll('#latency-group .seg-btn').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.ms, 10) === state.latency_ms);
+      });
+
+      const btnReady = document.getElementById('btn-readiness');
+      const dotReady = document.getElementById('dot-readiness');
+      const navReady = document.getElementById('nav-readiness');
+      btnReady.dataset.active = !state.ready;
+      btnReady.textContent = state.ready ? '200 READY' : '503 EVICTED';
+      navReady.textContent = state.ready ? 'READINESS: 200 READY' : 'READINESS: 503 EVICTED';
+      dotReady.className = state.ready ? 'dot' : 'dot warn';
+
+      const btnLive = document.getElementById('btn-liveness');
+      const dotLive = document.getElementById('dot-liveness');
+      const navLive = document.getElementById('nav-liveness');
+      btnLive.dataset.active = !state.healthy;
+      btnLive.textContent = state.healthy ? '200 ALIVE' : '500 POISONED';
+      navLive.textContent = state.healthy ? 'LIVENESS: 200 OK' : 'LIVENESS: 500 POISONED';
+      dotLive.className = state.healthy ? 'dot' : 'dot crit';
+
+      const expiries = data.expires_at || {};
+      for (const fault of ['monkey', 'latency', 'readiness', 'liveness']) {
+        const expiryElement = document.getElementById(`expiry-${fault}`);
+        const expiryValue = expiries[fault];
+        expiryElement.textContent = expiryValue
+          ? `AUTO-RECOVERY: ${new Date(expiryValue).toLocaleTimeString()}`
+          : 'EXPIRY: NOMINAL';
+      }
+    }
+
+    async function pollStatus() {
+      const requestEpoch = controlEpoch;
+      try {
+        const res = await fetchWithTimeout('/api/status', {}, 5000);
         if (!res.ok) throw new Error('Unreachable');
         const data = await res.json();
-
-        // Failover detection
-        if (lastPod && lastPod !== data.pod) {
-          const flag = document.getElementById('failover-flag');
-          flag.style.display = 'inline';
-          setTimeout(() => { flag.style.display = 'none'; }, 6000);
-        }
-        lastPod = data.pod;
-
-        document.getElementById('kpi-pod').textContent = data.pod;
-        document.getElementById('kpi-uptime').textContent = `${data.uptime_seconds} s`;
-        document.getElementById('kpi-ok').textContent = data.local_ok;
-        document.getElementById('kpi-err').textContent = data.local_err;
-
-        const total = data.local_ok + data.local_err;
-        const ratio = total > 0 ? ((data.local_ok / total) * 100).toFixed(1) : '100.0';
-        document.getElementById('kpi-rate-ratio').textContent = `${ratio}%`;
-        document.getElementById('kpi-offset').textContent = `+${data.latency_ms} ms`;
-
-        // Ambient fault glow trigger
-        const anyFault = data.monkey || !data.ready || !data.healthy || data.latency_ms > 0;
-        document.body.classList.toggle('fault-engaged', anyFault);
-
-        // Monkey Control State
-        const btnMonkey = document.getElementById('btn-monkey');
-        btnMonkey.dataset.active = data.monkey;
-        btnMonkey.textContent = data.monkey ? 'FAULT ACTIVE' : 'NOMINAL';
-        document.getElementById('kpi-monkey-state').textContent = data.monkey ? '50% HTTP 500' : 'Nominal';
-
-        // Segmented Latency State
-        document.querySelectorAll('#latency-group .seg-btn').forEach(btn => {
-          btn.classList.toggle('active', parseInt(btn.dataset.ms, 10) === data.latency_ms);
-        });
-
-        // Readiness Control State
-        const btnReady = document.getElementById('btn-readiness');
-        const dotReady = document.getElementById('dot-readiness');
-        const navReady = document.getElementById('nav-readiness');
-        btnReady.dataset.active = !data.ready;
-        btnReady.textContent = data.ready ? '200 READY' : '503 EVICTED';
-        navReady.textContent = data.ready ? 'READINESS: 200 READY' : 'READINESS: 503 EVICTED';
-        dotReady.className = data.ready ? 'dot' : 'dot warn';
-
-        // Liveness Control State
-        const btnLive = document.getElementById('btn-liveness');
-        const dotLive = document.getElementById('dot-liveness');
-        const navLive = document.getElementById('nav-liveness');
-        btnLive.dataset.active = !data.healthy;
-        btnLive.textContent = data.healthy ? '200 ALIVE' : '500 POISONED';
-        navLive.textContent = data.healthy ? 'LIVENESS: 200 OK' : 'LIVENESS: 500 POISONED';
-        dotLive.className = data.healthy ? 'dot' : 'dot crit';
-
+        if (requestEpoch === controlEpoch) renderSnapshot(data);
       } catch (e) {
-        document.getElementById('kpi-pod').textContent = 'reconnecting...';
+        document.getElementById('kpi-pod').textContent = 'reconnecting…';
+      }
+    }
+
+    function setControlsBusy(busy) {
+      document.querySelectorAll('#btn-monkey, #btn-readiness, #btn-liveness, #latency-group .seg-btn')
+        .forEach(control => { control.disabled = busy; });
+    }
+
+    function showControlError(message) {
+      const feedback = document.getElementById('control-feedback');
+      feedback.dataset.kind = 'error';
+      feedback.textContent = message;
+    }
+
+    async function sendChaosControl(url, actionLabel) {
+      const requestEpoch = ++controlEpoch;
+      setControlsBusy(true);
+      const feedback = document.getElementById('control-feedback');
+      feedback.dataset.kind = '';
+      feedback.textContent = `Sending ${actionLabel} control…`;
+      try {
+        const res = await fetchWithTimeout(url, { method: 'POST' }, 5000);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+
+        const pod = data.pod || 'unknown pod';
+        renderSnapshot({ ...(data.state || {}), pod, expires_at: data.expires_at || {} });
+        feedback.dataset.kind = 'success';
+        feedback.textContent = `${actionLabel} response came from ${pod}. State shown is local to that pod.`;
+      } catch (error) {
+        const reason = error.name === 'AbortError' ? 'timed out' : error.message;
+        showControlError(`${actionLabel} was not confirmed (${reason}). The control may have reached a pod; displayed state remains the last confirmed snapshot.`);
+      } finally {
+        if (requestEpoch === controlEpoch) {
+          controlEpoch += 1;
+          setControlsBusy(false);
+        }
       }
     }
 
     async function triggerChaos(action) {
-      await fetch(`/api/chaos/${action}`, { method: 'POST' });
-      await pollStatus();
+      await sendChaosControl(`/api/chaos/${action}`, action);
     }
 
     async function setLatency(ms) {
-      await fetch(`/api/chaos/latency?ms=${ms}`, { method: 'POST' });
-      await pollStatus();
+      await sendChaosControl(`/api/chaos/latency?ms=${encodeURIComponent(ms)}`, `latency ${ms}ms`);
     }
 
     async function fireWorkRequest() {
       const t0 = performance.now();
       try {
-        const res = await fetch('/api/work');
+        const res = await fetchWithTimeout('/api/work', {}, 7000);
         const data = await res.json();
         const ms = data.latency_ms ?? Math.round(performance.now() - t0);
         document.getElementById('kpi-latency').innerHTML = `${ms}<span style="font-size: 20px; color: var(--text-muted);"> ms</span>`;
