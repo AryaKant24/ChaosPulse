@@ -2,7 +2,26 @@ global:
   scrape_interval: 5s
 
 scrape_configs:
-  - job_name: "chaospulse-k8s"
+  - job_name: "chaospulse-pods"
     metrics_path: "/metrics"
-    static_configs:
-      - targets: ["host.docker.internal:8000"]
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - default
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: chaospulse
+      - source_labels: [__meta_kubernetes_pod_phase]
+        action: keep
+        regex: Running
+      - source_labels: [__meta_kubernetes_pod_ip]
+        action: replace
+        regex: (.+)
+        replacement: $1:8000
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace

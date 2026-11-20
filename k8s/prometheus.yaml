@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chaospulse-prometheus
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chaospulse-prometheus-discovery
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaospulse-prometheus-discovery
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: chaospulse-prometheus
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: chaospulse-prometheus-discovery
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaospulse-prometheus
+  namespace: default
+  labels:
+    app: chaospulse-prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chaospulse-prometheus
+  template:
+    metadata:
+      labels:
+        app: chaospulse-prometheus
+    spec:
+      serviceAccountName: chaospulse-prometheus
+      securityContext:
+        fsGroup: 65534
+      containers:
+        - name: prometheus
+          image: prom/prometheus
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --web.enable-lifecycle
+          ports:
+            - name: web
+              containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: chaospulse-prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chaospulse-prometheus
+  namespace: default
+spec:
+  selector:
+    app: chaospulse-prometheus
+  ports:
+    - name: web
+      port: 9090
+      targetPort: web

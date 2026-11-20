@@ -3,6 +3,7 @@ import os
 import random
 import socket
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,9 @@ app = FastAPI(
 POD_NAME = os.getenv("HOSTNAME", socket.gethostname())
 START_TIME = time.time()
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+DEFAULT_FAULT_DURATION_SECONDS = 60
+MAX_FAULT_DURATION_SECONDS = 300
+FAULT_NAMES = ("monkey", "latency", "readiness", "liveness")
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -40,6 +44,72 @@ state = {
     "local_ok": 0,           # Local Pod 200 counter for War Room UI
     "local_err": 0,          # Local Pod 500 counter for War Room UI
 }
+
+# Deadlines are process-local and monotonic. The UTC timestamps returned by the
+# API are derived from each deadline's remaining monotonic duration.
+fault_deadlines: dict[str, Optional[float]] = {name: None for name in FAULT_NAMES}
+
+
+def monotonic_now() -> float:
+    """Clock seam for deterministic expiry checks in unit tests."""
+    return time.monotonic()
+
+
+def _fault_is_active(name: str) -> bool:
+    if name == "monkey":
+        return state["monkey"]
+    if name == "latency":
+        return state["latency_ms"] > 0
+    if name == "readiness":
+        return not state["ready"]
+    if name == "liveness":
+        return not state["healthy"]
+    raise KeyError(name)
+
+
+def _clear_fault(name: str) -> None:
+    if name == "monkey":
+        state["monkey"] = False
+    elif name == "latency":
+        state["latency_ms"] = 0
+    elif name == "readiness":
+        state["ready"] = True
+    elif name == "liveness":
+        state["healthy"] = True
+    fault_deadlines[name] = None
+
+
+def expire_state(now: Optional[float] = None) -> None:
+    """Return expired process-local faults to nominal state on access."""
+    current = monotonic_now() if now is None else now
+    for name, deadline in fault_deadlines.items():
+        if deadline is not None and current >= deadline:
+            _clear_fault(name)
+
+
+def set_fault_expiry(name: str, duration_s: int, now: Optional[float] = None) -> None:
+    """Set a bounded monotonic deadline for an active fault."""
+    current = monotonic_now() if now is None else now
+    fault_deadlines[name] = current + duration_s
+
+
+def get_expiry_mapping(now: Optional[float] = None) -> dict[str, Optional[str]]:
+    """Represent active fault deadlines as UTC timestamps for API clients."""
+    current = monotonic_now() if now is None else now
+    wall_now = time.time()
+    expiries: dict[str, Optional[str]] = {}
+    for name in FAULT_NAMES:
+        deadline = fault_deadlines[name]
+        if not _fault_is_active(name) or deadline is None:
+            expiries[name] = None
+            continue
+        wall_deadline = wall_now + max(0.0, deadline - current)
+        expiries[name] = (
+            datetime.fromtimestamp(wall_deadline, tz=timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+    return expiries
 
 
 def get_or_create_counter(name: str, doc: str, labelnames: list[str]) -> Counter:
@@ -84,7 +154,6 @@ REQUEST_LATENCY = get_or_create_histogram(
 REQUEST_COUNT.labels(endpoint="/api/work", status="200", pod=POD_NAME).inc(0)
 REQUEST_COUNT.labels(endpoint="/api/work", status="500", pod=POD_NAME).inc(0)
 IN_FLIGHT.labels(pod=POD_NAME).set(0)
-REQUEST_LATENCY.labels(endpoint="/api/work", pod=POD_NAME).observe(0.005)
 
 
 @app.get("/", include_in_schema=False)
@@ -98,6 +167,8 @@ async def root():
 @app.get("/api/status")
 async def get_status():
     """Returns live Pod identity, probe statuses, and chaos flags for the War Room UI."""
+    expire_state()
+    now = monotonic_now()
     return {
         "pod": POD_NAME,
         "uptime_seconds": round(time.time() - START_TIME, 1),
@@ -107,12 +178,14 @@ async def get_status():
         "healthy": state["healthy"],
         "local_ok": state["local_ok"],
         "local_err": state["local_err"],
+        "expires_at": get_expiry_mapping(now),
     }
 
 
 @app.get("/healthz")
 async def healthz():
     """Kubernetes Liveness Probe: returns 500 when poisoned to trigger a container restart."""
+    expire_state()
     if not state["healthy"]:
         return JSONResponse(
             status_code=500,
@@ -124,6 +197,7 @@ async def healthz():
 @app.get("/readyz")
 async def readyz():
     """Kubernetes Readiness Probe: returns 503 to evict Pod from Service endpoints."""
+    expire_state()
     if not state["ready"]:
         return JSONResponse(
             status_code=503,
@@ -135,6 +209,7 @@ async def readyz():
 @app.get("/api/work")
 async def do_work():
     """Simulates workload execution and records Prometheus Counter, Gauge, and Histogram metrics."""
+    expire_state()
     IN_FLIGHT.labels(pod=POD_NAME).inc()
     start = time.perf_counter()
     try:
@@ -142,6 +217,9 @@ async def do_work():
         base_delay = random.uniform(0.01, 0.045)
         extra_delay = state["latency_ms"] / 1000.0
         await asyncio.sleep(base_delay + extra_delay)
+        # A fault may expire while this request is waiting on its simulated delay.
+        # Reconcile state before reading flags again after the await.
+        expire_state()
 
         # Chaos Monkey: 50% chance of throwing HTTP 500 when enabled
         if state["monkey"] and random.random() < 0.5:
@@ -177,24 +255,47 @@ async def do_work():
 async def trigger_chaos(
     action: str,
     ms: Optional[int] = Query(default=None, description="Optional latency in ms"),
+    duration_s: int = Query(
+        default=DEFAULT_FAULT_DURATION_SECONDS,
+        ge=1,
+        le=MAX_FAULT_DURATION_SECONDS,
+        description="Fault lifetime in seconds (1-300)",
+    ),
 ):
     """Toggles or resets chaos modes for the current Pod replica."""
+    expire_state()
+    now = monotonic_now()
+
     if action == "monkey":
-        state["monkey"] = not state["monkey"]
+        if state["monkey"]:
+            _clear_fault("monkey")
+        else:
+            state["monkey"] = True
+            set_fault_expiry("monkey", duration_s, now)
     elif action == "latency":
         if ms is not None:
             state["latency_ms"] = max(0, min(ms, 5000))
         else:
             state["latency_ms"] = 0 if state["latency_ms"] > 0 else 600
+        if state["latency_ms"] > 0:
+            set_fault_expiry("latency", duration_s, now)
+        else:
+            _clear_fault("latency")
     elif action == "readiness":
-        state["ready"] = not state["ready"]
+        if state["ready"]:
+            state["ready"] = False
+            set_fault_expiry("readiness", duration_s, now)
+        else:
+            _clear_fault("readiness")
     elif action == "liveness":
-        state["healthy"] = not state["healthy"]
+        if state["healthy"]:
+            state["healthy"] = False
+            set_fault_expiry("liveness", duration_s, now)
+        else:
+            _clear_fault("liveness")
     elif action == "reset":
-        state["monkey"] = False
-        state["latency_ms"] = 0
-        state["ready"] = True
-        state["healthy"] = True
+        for name in FAULT_NAMES:
+            _clear_fault(name)
     else:
         return JSONResponse(status_code=400, content={"error": f"Unknown action: {action}"})
 
@@ -202,10 +303,12 @@ async def trigger_chaos(
         "action": action,
         "pod": POD_NAME,
         "state": state,
+        "expires_at": get_expiry_mapping(now),
     }
 
 
 @app.get("/metrics")
 async def metrics():
     """Prometheus scrape endpoint."""
+    expire_state()
     return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)

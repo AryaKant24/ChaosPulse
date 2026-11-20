@@ -21,8 +21,19 @@ if ($LASTEXITCODE -ne 0) {
     docker build -t chaospulse:1.0 .
     minikube image load chaospulse:1.0 --overwrite=true
 }
+
+$prometheusConfigPath = Join-Path $PSScriptRoot "monitoring\prometheus.yml"
+kubectl create configmap chaospulse-prometheus-config `
+  --from-file="prometheus.yml=$prometheusConfigPath" `
+  --dry-run=client -o yaml | kubectl apply -f -
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to create or update the Prometheus configuration ConfigMap."
+}
+
 kubectl apply -f k8s/
 kubectl rollout status deployment/chaospulse-deploy --timeout=90s
+kubectl rollout restart deployment/chaospulse-prometheus
+kubectl rollout status deployment/chaospulse-prometheus --timeout=90s
 
 # 3. Start Jenkins
 Write-Host "[3/5] Starting Jenkins CI controller (Port 8080)..." -ForegroundColor Yellow
@@ -37,12 +48,12 @@ if ($jenkinsExists -eq "jenkins") {
       --group-add 0 my-jenkins | Out-Null
 }
 
-# 4. Start Prometheus with updated monitoring/prometheus.yml mount
-Write-Host "[4/5] Starting Prometheus scraper (Port 9090)..." -ForegroundColor Yellow
-docker rm -f prometheus 2>$null | Out-Null
-docker run -d --name prometheus -p 9090:9090 `
-  -v "${PWD}/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml" `
-  prom/prometheus | Out-Null
+# 4. Prometheus runs in Minikube and discovers ChaosPulse pods directly.
+Write-Host "[4/5] Prometheus pod discovery is deployed in Minikube..." -ForegroundColor Yellow
+$legacyPrometheus = docker ps -a --filter "name=^/prometheus$" --format "{{.Names}}"
+if ($legacyPrometheus -eq "prometheus") {
+    docker rm -f prometheus | Out-Null
+}
 
 # 5. Start Grafana with persistent storage volume
 Write-Host "[5/5] Starting Grafana with persistent storage (Port 3000)..." -ForegroundColor Yellow
@@ -63,10 +74,25 @@ Write-Host "  Jenkins CI  : http://localhost:8080"
 Write-Host "  Prometheus  : http://localhost:9090/targets"
 Write-Host "  Grafana     : http://localhost:3000  (admin / admin)"
 Write-Host "====================================================" -ForegroundColor Green
-Write-Host "Starting self-healing port-forward tunnel (Press Ctrl+C to stop)..." -ForegroundColor Cyan
+Write-Host "Starting app and Prometheus port-forwards (Press Ctrl+C to stop)..." -ForegroundColor Cyan
 
-while ($true) {
-    kubectl port-forward svc/chaospulse-svc 8000:80
-    Write-Host "Reconnecting tunnel to healthy replica..." -ForegroundColor DarkYellow
-    Start-Sleep -Seconds 1
+$kubectlCommand = (Get-Command kubectl -ErrorAction Stop).Source
+$prometheusForward = Start-Job -Name "chaospulse-prometheus-port-forward" -ArgumentList $kubectlCommand -ScriptBlock {
+    param($KubectlCommand)
+    while ($true) {
+        & $KubectlCommand port-forward svc/chaospulse-prometheus 9090:9090
+        Start-Sleep -Seconds 1
+    }
+}
+
+try {
+    while ($true) {
+        kubectl port-forward svc/chaospulse-svc 8000:80
+        Write-Host "Reconnecting app tunnel..." -ForegroundColor DarkYellow
+        Start-Sleep -Seconds 1
+    }
+}
+finally {
+    Stop-Job -Job $prometheusForward -ErrorAction SilentlyContinue
+    Remove-Job -Job $prometheusForward -Force -ErrorAction SilentlyContinue
 }
